@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autonomous Research Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ["Inter", "-apple-system", "BlinkMacSystemFont", "sans-serif"],
+                        mono: ["Geist Mono", "Menlo", "monospace"],
+                    },
+                    colors: {
+                        zinc: {
+                            950: "#09090b",
+                            900: "#121215",
+                            850: "#18181b",
+                            800: "#27272a",
+                            700: "#3f3f46",
+                            600: "#52525b",
+                            400: "#a1a1aa",
+                            200: "#e4e4e7",
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body { font-family: "Inter", sans-serif; background-color: #09090b; }
+        .font-mono { font-family: "Geist Mono", monospace; }
+        .prose h1 { font-size: 1.5rem; font-weight: 700; margin: 1.5rem 0 0.75rem; color: #f4f4f5; letter-spacing: -0.02em; }
+        .prose h2 { font-size: 1.2rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: #e4e4e7; border-bottom: 1px solid #27272a; padding-bottom: 0.25rem; letter-spacing: -0.01em; }
+        .prose h3 { font-size: 1rem; font-weight: 600; margin: 1rem 0 0.25rem; color: #d4d4d8; }
+        .prose p { margin: 0.5rem 0; line-height: 1.65; color: #a1a1aa; font-size: 0.875rem; }
+        .prose ul { list-style-type: disc; margin: 0.5rem 0 0.5rem 1.25rem; color: #a1a1aa; font-size: 0.875rem; }
+        .prose li { margin-bottom: 0.25rem; }
+        .prose strong { color: #f4f4f5; font-weight: 600; }
+        .prose a { color: #38bdf8; text-decoration: none; border-bottom: 1px dotted #38bdf8; }
+        .prose a:hover { border-bottom-style: solid; }
+        .prose blockquote { border-left: 2px solid #52525b; padding-left: 0.75rem; color: #71717a; margin: 0.75rem 0; font-size: 0.875rem; }
+        .prose code { font-family: "Geist Mono", monospace; background-color: #18181b; border: 1px solid #27272a; color: #e4e4e7; padding: 0.1rem 0.3rem; border-radius: 0.25rem; font-size: 0.8rem; }
+        .prose hr { border-color: #27272a; margin: 1.5rem 0; }
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-track { background: transparent; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #27272a; border-radius: 2px; }
+    </style>
+</head>
+<body class="bg-zinc-950 text-zinc-200 min-h-screen flex flex-col antialiased selection:bg-zinc-800 selection:text-white">
+    <header class="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 h-12 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-2 h-2 rounded-full bg-emerald-500"></div>
+                <span class="font-semibold text-xs text-zinc-100 tracking-tight">RESEARCH ENGINE</span>
+                <span class="text-zinc-600 text-xs">/</span>
+                <span class="text-xs font-mono text-zinc-400">langgraph-multi-agent</span>
+            </div>
+            <div class="flex items-center space-x-3 text-xs">
+                <div id="modelTag" class="font-mono text-[11px] text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded">
+                    loading model...
+                </div>
+                <div id="langsmithTag" class="hidden font-mono text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/50 px-2 py-0.5 rounded">
+                    langsmith: active
+                </div>
+            </div>
+        </div>
+    </header>
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 py-5 flex-1 flex flex-col gap-4 w-full">
+        <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-3">
+            <div class="flex flex-col gap-2">
+                <div class="relative flex items-center">
+                    <input type="text" id="taskInput" 
+                        class="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3.5 py-2 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-600 transition font-sans"
+                        placeholder="Enter research topic (e.g. Perkembangan AI di Indonesia 2026)..."
+                        onkeydown="if(event.key === 'Enter') startResearch();">
+                    <button id="runBtn" onclick="startResearch()" 
+                        class="absolute right-1.5 px-3 py-1 bg-zinc-100 hover:bg-white text-zinc-950 font-medium text-xs rounded transition flex items-center gap-1.5 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <span id="btnText">Run</span>
+                        <span class="text-[10px] text-zinc-500 font-mono">Enter</span>
+                    </button>
+                </div>
+                <div class="flex items-center justify-between text-[11px] text-zinc-500 px-0.5">
+                    <div class="flex items-center gap-2">
+                        <span>Presets:</span>
+                        <button onclick="setQuery('Perkembangan industri kendaraan listrik dan baterai di Indonesia 2026')" class="text-zinc-400 hover:text-zinc-200 transition underline underline-offset-2">EV Indonesia</button>
+                        <span>-</span>
+                        <button onclick="setQuery('Agentic AI architecture patterns: Multi-agent state machines vs simple chains')" class="text-zinc-400 hover:text-zinc-200 transition underline underline-offset-2">Agentic Patterns</button>
+                    </div>
+                    <span class="font-mono text-[10px] text-zinc-600">Press Enter to execute</span>
+                </div>
+            </div>
+        </div>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 items-start">
+            <div class="lg:col-span-5 bg-zinc-900 border border-zinc-800 rounded-lg flex flex-col h-[680px]">
+                <div class="flex items-center justify-between px-3.5 py-2.5 border-b border-zinc-800 bg-zinc-900/50">
+                    <span class="text-xs font-semibold text-zinc-300 uppercase tracking-wider font-mono">Execution Log</span>
+                    <span id="statusIndicator" class="text-[11px] font-mono text-zinc-500">idle</span>
+                </div>
+                <div id="stepsContainer" class="flex-1 overflow-y-auto custom-scroll p-3 space-y-2.5 font-mono text-xs">
+                    <div id="emptySteps" class="h-full flex flex-col items-center justify-center text-center text-zinc-600 py-16">
+                        <p class="text-xs">No active execution</p>
+                        <p class="text-[11px] text-zinc-700 mt-1">Planner - Researcher - Fact-Checker - Writer logs stream here.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="lg:col-span-7 bg-zinc-900 border border-zinc-800 rounded-lg flex flex-col h-[680px]">
+                <div class="flex items-center justify-between px-3.5 py-2 border-b border-zinc-800 bg-zinc-900/50">
+                    <span class="text-xs font-semibold text-zinc-300 uppercase tracking-wider font-mono">Report Output</span>
+                    <div class="flex items-center gap-1.5">
+                        <button id="copyBtn" onclick="copyReport()" class="hidden px-2 py-1 text-[11px] font-mono rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition">
+                            <span id="copyText">copy</span>
+                        </button>
+                        <button id="downloadBtn" onclick="downloadReport()" class="hidden px-2 py-1 text-[11px] font-mono rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition">
+                            export .md
+                        </button>
+                    </div>
+                </div>
+                <div id="reportContainer" class="flex-1 overflow-y-auto custom-scroll p-5">
+                    <div id="emptyReport" class="h-full flex flex-col items-center justify-center text-center text-zinc-600 py-16">
+                        <p class="text-xs">Report output is empty</p>
+                        <p class="text-[11px] text-zinc-700 mt-1">Generated markdown document with verified sources appears here.</p>
+                    </div>
+                    <div id="reportContent" class="prose max-w-none hidden"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+    <footer class="border-t border-zinc-800 py-2.5 px-4 text-center text-[11px] font-mono text-zinc-600 bg-zinc-950">
+        Autonomous Research Engine - LangGraph - OpenRouter - LangSmith
+    </footer>
+    <script>
+        var eventSource = null;
+        var finalReportMarkdown = "";
+
+        function setQuery(text) {
+            document.getElementById("taskInput").value = text;
+        }
+
+        function initConfig() {
+            fetch("/api/config")
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    document.getElementById("modelTag").textContent = data.configured_model || "default";
+                    if (data.langsmith_active) {
+                        document.getElementById("langsmithTag").classList.remove("hidden");
+                    }
+                })
+                .catch(function(err) { console.error("Config fetch error:", err); });
+        }
+        initConfig();
+
+        function startResearch() {
+            var taskInput = document.getElementById("taskInput");
+            var task = taskInput.value.trim();
+            if (!task) return;
+
+            finalReportMarkdown = "";
+            var emptySteps = document.getElementById("emptySteps");
+            if (emptySteps) emptySteps.remove();
+            document.getElementById("stepsContainer").innerHTML = "";
+            document.getElementById("emptyReport").classList.remove("hidden");
+            document.getElementById("reportContent").classList.add("hidden");
+            document.getElementById("reportContent").innerHTML = "";
+            document.getElementById("copyBtn").classList.add("hidden");
+            document.getElementById("downloadBtn").classList.add("hidden");
+
+            var btn = document.getElementById("runBtn");
+            var btnText = document.getElementById("btnText");
+            btn.disabled = true;
+            btnText.textContent = "Running";
+            var status = document.getElementById("statusIndicator");
+            status.textContent = "active";
+            status.className = "text-[11px] font-mono text-amber-400";
+
+            if (eventSource) {
+                eventSource.close();
+            }
+
+            var streamUrl = "/api/stream?task=" + encodeURIComponent(task);
+            eventSource = new EventSource(streamUrl);
+
+            eventSource.onmessage = function(event) {
+                try {
+                    var payload = JSON.parse(event.data);
+                    handleEvent(payload);
+                } catch (e) {
+                    console.error("Parse error:", e);
+                }
+            };
+
+            eventSource.onerror = function(err) {
+                console.error("Stream error/closed:", err);
+                resetButton();
+                eventSource.close();
+            };
+        }
+
+        function handleEvent(data) {
+            if (data.type === "init") {
+                appendLog("sys", "thread: " + data.thread_id.substring(0,8) + " | task: " + data.task);
+            } else if (data.type === "step") {
+                renderStep(data.node, data.payload);
+            } else if (data.type === "complete") {
+                finalReportMarkdown = data.report;
+                document.getElementById("emptyReport").classList.add("hidden");
+                var reportContent = document.getElementById("reportContent");
+                reportContent.classList.remove("hidden");
+                reportContent.innerHTML = marked.parse(data.report);
+
+                document.getElementById("copyBtn").classList.remove("hidden");
+                document.getElementById("downloadBtn").classList.remove("hidden");
+                var status = document.getElementById("statusIndicator");
+                status.textContent = "completed";
+                status.className = "text-[11px] font-mono text-emerald-400";
+
+                appendLog("done", "report compiled with verified citations");
+                resetButton();
+                eventSource.close();
+            } else if (data.type === "error") {
+                appendLog("err", data.message);
+                var status = document.getElementById("statusIndicator");
+                status.textContent = "error";
+                status.className = "text-[11px] font-mono text-rose-400";
+                resetButton();
+                eventSource.close();
+            }
+        }
+
+        function renderStep(node, payload) {
+            var container = document.getElementById("stepsContainer");
+            var card = document.createElement("div");
+            card.className = "p-2.5 rounded bg-zinc-950 border border-zinc-800 space-y-1.5";
+
+            if (node === "planner") {
+                var queries = (payload.queries || []).map(function(q) {
+                    return "<div class='text-zinc-400 pl-2'>-> " + q + "</div>";
+                }).join("");
+                card.innerHTML = "<div class='flex items-center justify-between text-zinc-300'>" +
+                    "<span class='font-semibold text-sky-400'>[planner]</span>" +
+                    "<span class='text-zinc-500 text-[10px]'>" + (payload.queries ? payload.queries.length : 0) + " sub-queries</span></div>" +
+                    "<div class='space-y-0.5 text-[11px]'>" + queries + "</div>";
+            } else if (node === "researcher") {
+                var sources = (payload.sources || []).slice(0, 3).map(function(s) {
+                    return "<div class='truncate pl-2'><a href='" + s.url + "' target='_blank' class='text-teal-400 hover:underline'>-> " + s.title + "</a></div>";
+                }).join("");
+                card.innerHTML = "<div class='flex items-center justify-between text-zinc-300'>" +
+                    "<span class='font-semibold text-teal-400'>[researcher]</span>" +
+                    "<span class='text-zinc-500 text-[10px]'>duckduckgo</span></div>" +
+                    "<div class='text-zinc-400 text-[11px]'>" + (payload.detail || "") + "</div>" +
+                    "<div class='space-y-0.5 text-[11px]'>" + sources + "</div>";
+            } else if (node === "fact_checker") {
+                var passed = payload.passed;
+                var statusColor = passed ? "text-emerald-400" : "text-amber-400";
+                card.innerHTML = "<div class='flex items-center justify-between'>" +
+                    "<span class='font-semibold " + statusColor + "'>[fact-checker]</span>" +
+                    "<span class='text-[10px] px-1 rounded bg-zinc-900 border border-zinc-800 " + statusColor + "'>" + (payload.status || "") + "</span></div>" +
+                    "<div class='text-zinc-400 text-[11px] pl-2'>-> " + (payload.detail || "") + "</div>";
+            } else if (node === "writer") {
+                card.innerHTML = "<div class='flex items-center justify-between'>" +
+                    "<span class='font-semibold text-purple-400'>[writer]</span>" +
+                    "<span class='text-zinc-500 text-[10px]'>synthesis</span></div>" +
+                    "<div class='text-zinc-400 text-[11px] pl-2'>-> synthesizing final markdown intelligence report...</div>";
+            }
+
+            container.appendChild(card);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function appendLog(type, msg) {
+            var container = document.getElementById("stepsContainer");
+            var div = document.createElement("div");
+            div.className = "text-[11px] text-zinc-500 flex items-start gap-1.5";
+            var prefix = "<span class='text-zinc-600'>[sys]</span>";
+            if (type === "done") prefix = "<span class='text-emerald-500'>[ok]</span>";
+            if (type === "err") prefix = "<span class='text-rose-500'>[err]</span>";
+            div.innerHTML = prefix + " <span class='break-all'>" + msg + "</span>";
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function resetButton() {
+            var btn = document.getElementById("runBtn");
+            var btnText = document.getElementById("btnText");
+            btn.disabled = false;
+            btnText.textContent = "Run";
+        }
+
+        function copyReport() {
+            if (!finalReportMarkdown) return;
+            navigator.clipboard.writeText(finalReportMarkdown).then(function() {
+                var copyText = document.getElementById("copyText");
+                copyText.textContent = "copied";
+                setTimeout(function() { copyText.textContent = "copy"; }, 1500);
+            });
+        }
+
+        function downloadReport() {
+            if (!finalReportMarkdown) return;
+            var blob = new Blob([finalReportMarkdown], { type: "text/markdown" });
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = "report_" + Date.now() + ".md";
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
