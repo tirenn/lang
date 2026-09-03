@@ -30,5 +30,15 @@ class AgentState(TypedDict):
     revision_count: int
     max_revisions: int
     
+    # Optional model overrides per agent
+    planner_model: Optional[str]
+    researcher_model: Optional[str]
+    fact_checker_model: Optional[str]
+    writer_model: Optional[str]
+    
+    # Indonesian Fact-Checking Verdict (FAKTA, HOAKS, DISINFORMASI, dll)
+    verdict: Optional[str]
+    confidence_score: Optional[float]
+    
     # Final output
     final_report: Optional[str]

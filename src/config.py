@@ -12,14 +12,20 @@ DEFAULT_FREE_FALLBACKS = [
     "nvidia/nemotron-3.5-lightning:free"
 ]
 
+def get_default_model() -> str:
+    raw = os.getenv("AVAILABLE_MODELS", "")
+    if raw:
+        models = [m.strip() for m in raw.split(",") if m.strip()]
+        if models:
+            return models[0]
+    return "minimax/minimax-m2.7:free"
+
 def get_agent_llm(agent_name: str, temperature: float = 0.2, model_override: Optional[str] = None) -> BaseChatModel:
     """
-    Initializes and returns the Chat Model assigned to a specific agent.
-    Checks for <AGENT_NAME>_MODEL in .env first, then falls back to MODEL_NAME.
+    Initializes and returns the Chat Model assigned to an agent.
+    Priority: model_override (from UI) -> <AGENT>_MODEL -> first model in AVAILABLE_MODELS.
     """
-    env_agent_key = f"{agent_name.upper()}_MODEL"
-    assigned_model = model_override or os.getenv(env_agent_key) or os.getenv("MODEL_NAME", "minimax/minimax-m2.7:free")
-    
+    assigned_model = model_override or os.getenv(f"{agent_name.upper()}_MODEL") or get_default_model()
     return get_llm(temperature=temperature, model_override=assigned_model)
 
 def get_llm(temperature: float = 0.2, model_override: Optional[str] = None) -> BaseChatModel:
@@ -27,7 +33,7 @@ def get_llm(temperature: float = 0.2, model_override: Optional[str] = None) -> B
     Base LLM initializer with OpenRouter 3-model fallback cascade.
     """
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-    primary_model = model_override or os.getenv("MODEL_NAME", "minimax/minimax-m2.7:free")
+    primary_model = model_override or get_default_model()
     
     if openrouter_api_key:
         models_list = [primary_model]

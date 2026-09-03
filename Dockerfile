@@ -23,7 +23,7 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY . .
 
 # Expose Web UI port
-EXPOSE 8000
+EXPOSE 8081
 
-# Default command: run FastAPI Web UI Server
-CMD ["uvicorn", "src.server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default command: run FastAPI Web UI Server with dynamic PORT
+CMD ["sh", "-c", "uvicorn src.server:app --host 0.0.0.0 --port ${PORT:-8081}"]

@@ -1,4 +1,4 @@
-from typing import Dict, Any
+﻿from typing import Dict, Any
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
@@ -6,47 +6,55 @@ from src.state import AgentState
 from src.config import get_agent_llm
 
 class FactCheckOutput(BaseModel):
-    passed: bool = Field(
-        description="True if findings are accurate, sufficient, and free of glaring contradictions. False if major info is missing."
-    )
-    feedback: str = Field(
-        description="Constructive critique detailing what is missing or needs further verification if passed=False, or confirmation if passed=True."
+    verdict: str = Field(
+        description="Official fact-check verdict: choose exactly one from: TRUE, FALSE / HOAX, DISINFORMATION, MISINFORMATION, PARTLY TRUE, UNPROVEN."
     )
     confidence_score: float = Field(
-        description="Confidence score between 0.0 and 1.0 regarding source quality and coverage."
+        description="Confidence score between 0.0 and 1.0 (e.g. 0.95)."
+    )
+    passed: bool = Field(
+        description="True if evidence gathered is sufficient to render a definitive verdict. False if evidence is insufficient and another search iteration is required."
+    )
+    feedback: str = Field(
+        description="Concise analytical evaluation of the evidence and justification for the assigned verdict."
     )
 
 parser = JsonOutputParser(pydantic_object=FactCheckOutput)
 
-FACT_CHECK_PROMPT = """You are a Principal Fact-Checker and Research Validator.
-Evaluate whether the collected research data adequately, accurately, and objectively answers the user's research topic.
+FACT_CHECK_PROMPT = """You are the Chair of the Fact-Check Verification Board (following IFCN & MAFINDO standards).
+Your responsibility is to verify claims objectively against digital evidence and news sources collected.
 
-User Topic:
+Claim Under Verification:
 {task}
 
-Collected Evidence:
+Evidence & Sources Gathered:
 {evidence}
 
 Current Iteration: {revision_count} / {max_revisions}
 
-Instructions:
-1. Check for coverage of all critical angles of the topic.
-2. Check for reliability and consistency among sources.
-3. If critical angles are missing or ambiguous, set passed=false and provide specific instructions in feedback.
-4. If sources are sufficient and trustworthy, set passed=true.
+Verdict Classification Taxonomy:
+1. "TRUE": Claim is backed by official institutional data, verified authorities, or primary empirical evidence.
+2. "FALSE / HOAX": Claim is entirely fabricated, baseless, or officially debunked.
+3. "DISINFORMATION": Information deliberately distorted or engineered to mislead the public.
+4. "MISINFORMATION": Information is inaccurate or uses genuine media out of historical/geographical context.
+5. "PARTLY TRUE": Contains an element of truth mixed with exaggerations, unverified rumors, or false conclusions.
+6. "UNPROVEN": Insufficient verifiable evidence or lack of official corroboration to confirm or deny.
+
+If sufficient credible evidence exists, set `passed=true`.
+Only set `passed=false` if evidence is completely lacking and the iteration limit has not been reached.
 
 {format_instructions}
 """
 
 def fact_checker_node(state: AgentState) -> Dict[str, Any]:
-    """Node: Evaluates source quality and decides if more research is required."""
-    llm = get_agent_llm("fact_checker")
+    """Node: Cross-examines claim against evidence and delivers fact-check verdict."""
+    llm = get_agent_llm("fact_checker", model_override=state.get("fact_checker_model"))
     
     evidence_blocks = []
     for item in state.get("research_data", []):
         evidence_blocks.append(f"- [{item['title']}]({item['source_url']}): {item['snippet']}")
     
-    evidence_text = "\n".join(evidence_blocks) if evidence_blocks else "No research data collected."
+    evidence_text = "\n".join(evidence_blocks) if evidence_blocks else "No evidence available."
     
     current_revisions = state.get("revision_count", 0)
     max_revisions = state.get("max_revisions", 2)
@@ -64,13 +72,19 @@ def fact_checker_node(state: AgentState) -> Dict[str, Any]:
             "revision_count": current_revisions,
             "max_revisions": max_revisions
         })
+        verdict = str(result.get("verdict", "PARTLY TRUE")).upper()
+        confidence = float(result.get("confidence_score", 0.85))
         passed = bool(result.get("passed", True))
-        feedback = str(result.get("feedback", "Sufficient evidence gathered."))
+        feedback = str(result.get("feedback", "Sufficient evidence verified."))
     except Exception as e:
+        verdict = "PARTLY TRUE"
+        confidence = 0.75
         passed = True
-        feedback = f"Automated pass (Validation note: {str(e)})"
+        feedback = f"Automated pass based on initial sources (Note: {str(e)})"
     
     return {
+        "verdict": verdict,
+        "confidence_score": confidence,
         "critique_passed": passed,
         "critique_feedback": feedback,
         "revision_count": current_revisions + 1

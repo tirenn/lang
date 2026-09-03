@@ -1,16 +1,29 @@
-version: '3.8'
-
 services:
   research-agent:
     build:
       context: .
       dockerfile: Dockerfile
     image: multi-agent-researcher:latest
-    container_name: research_agent_ui
-    ports:
-      - "8090:8000"
+    container_name: tirenn-lang-agent
+    restart: always
     env_file:
       - .env
+    environment:
+      - PORT=${PORT:-8081}
+    ports:
+      - "${PORT:-8081}:${PORT:-8081}"
     volumes:
       - ./:/app
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${PORT:-8081}/api/config || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - tirenn-net
+
+networks:
+  tirenn-net:
+    name: tirenn-net
+    external: true

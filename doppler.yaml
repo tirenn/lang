@@ -1,0 +1,7 @@
+# ==============================================================================
+# Doppler Configuration File (https://docs.doppler.com/docs/doppler-yaml)
+# ==============================================================================
+
+setup:
+  project: lang
+  config: prd

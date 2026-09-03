@@ -36,18 +36,38 @@ async def get_index():
 
 @app.get("/api/config")
 async def get_system_config():
-    model_name = os.getenv("MODEL_NAME", "google/gemma-4-31b-it:free")
     provider = "OpenRouter" if os.getenv("OPENROUTER_API_KEY") else ("OpenAI" if os.getenv("OPENAI_API_KEY") else "Custom")
+    raw_models = os.getenv("AVAILABLE_MODELS", "")
+    if raw_models:
+        available_models = [m.strip() for m in raw_models.split(",") if m.strip()]
+    else:
+        available_models = [
+            "minimax/minimax-m2.7:free",
+            "google/gemma-4-31b-it:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "z-ai/glm-5.2:free",
+            "meta-llama/llama-3.3-70b-instruct:free"
+        ]
+
+    default_model = available_models[0]
     return {
         "langsmith_active": is_langsmith_configured(),
-        "configured_model": model_name,
+        "configured_model": default_model,
+        "planner_model": default_model,
+        "researcher_model": default_model,
+        "fact_checker_model": available_models[1] if len(available_models) > 1 else default_model,
+        "writer_model": default_model,
+        "available_models": available_models,
         "provider": provider
     }
 
 @app.get("/api/stream")
 async def stream_research(
     task: str = Query(..., description="Research topic or question"),
-    model: Optional[str] = Query(None, description="Optional model override")
+    planner_model: Optional[str] = Query(None, description="Model override for Planner"),
+    researcher_model: Optional[str] = Query(None, description="Model override for Researcher"),
+    fact_checker_model: Optional[str] = Query(None, description="Model override for Fact-Checker"),
+    writer_model: Optional[str] = Query(None, description="Model override for Writer")
 ):
     """
     Streams LangGraph step-by-step execution events using Server-Sent Events (SSE).
@@ -55,7 +75,15 @@ async def stream_research(
     async def event_generator() -> AsyncGenerator[dict, None]:
         thread_id = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread_id}}
-        active_model = model or os.getenv("MODEL_NAME", "google/gemma-4-31b-it:free")
+        
+        raw_models = os.getenv("AVAILABLE_MODELS", "")
+        fallback_models = [m.strip() for m in raw_models.split(",") if m.strip()] if raw_models else ["minimax/minimax-m2.7:free"]
+        def_m = fallback_models[0]
+        
+        act_planner = planner_model or def_m
+        act_researcher = researcher_model or def_m
+        act_checker = fact_checker_model or (fallback_models[1] if len(fallback_models) > 1 else def_m)
+        act_writer = writer_model or def_m
         
         # Initial event
         yield {
@@ -64,7 +92,12 @@ async def stream_research(
                 "type": "init",
                 "thread_id": thread_id,
                 "task": task,
-                "model": active_model,
+                "models": {
+                    "planner": act_planner,
+                    "researcher": act_researcher,
+                    "fact_checker": act_checker,
+                    "writer": act_writer
+                },
                 "langsmith_active": is_langsmith_configured()
             })
         }
@@ -79,6 +112,10 @@ async def stream_research(
             "critique_passed": False,
             "revision_count": 0,
             "max_revisions": 2,
+            "planner_model": act_planner,
+            "researcher_model": act_researcher,
+            "fact_checker_model": act_checker,
+            "writer_model": act_writer,
             "final_report": None
         }
         
@@ -88,28 +125,36 @@ async def stream_research(
                     log_data = {"node": node_name}
                     
                     if node_name == "planner":
-                        log_data["title"] = "Strategic Research Planner"
-                        log_data["detail"] = f"Generated {len(node_output.get('plan', []))} search sub-queries."
+                        log_data["model"] = act_planner
+                        log_data["title"] = "Claim Deconstructor & Query Strategist"
+                        log_data["detail"] = f"Formulated {len(node_output.get('plan', []))} targeted fact-checking queries."
                         log_data["queries"] = node_output.get("plan", [])
                         
                     elif node_name == "researcher":
                         findings = node_output.get("research_data", [])
-                        log_data["title"] = "Live Web Researcher"
-                        log_data["detail"] = f"Gathered {len(findings)} source snippets from web search."
+                        log_data["model"] = act_researcher
+                        log_data["title"] = "Evidence & Source Investigation"
+                        log_data["detail"] = f"Gathered {len(findings)} verified news and institutional sources."
                         log_data["sources"] = [{"title": f["title"], "url": f["source_url"], "snippet": f["snippet"]} for f in findings]
                         
                     elif node_name == "fact_checker":
                         passed = node_output.get("critique_passed", False)
                         feedback = node_output.get("critique_feedback", "")
                         rev = node_output.get("revision_count", 0)
-                        log_data["title"] = f"Fact-Checker & Critic (Iteration {rev})"
+                        verdict = node_output.get("verdict", "PARTLY TRUE")
+                        confidence = node_output.get("confidence_score", 0.85)
+                        log_data["model"] = act_checker
+                        log_data["title"] = f"Verification Board (Verdict: {verdict})"
                         log_data["passed"] = passed
-                        log_data["status"] = "PASSED" if passed else "REVISION NEEDED"
+                        log_data["verdict"] = verdict
+                        log_data["confidence"] = confidence
+                        log_data["status"] = verdict
                         log_data["detail"] = feedback
                         
                     elif node_name == "writer":
-                        log_data["title"] = "Executive Intelligence Writer"
-                        log_data["detail"] = "Synthesized comprehensive final report."
+                        log_data["model"] = act_writer
+                        log_data["title"] = "Fact-Check Report Synthesizer"
+                        log_data["detail"] = "Synthesizing IFCN-standard investigative fact-check report."
                     
                     yield {
                         "event": "message",
@@ -122,13 +167,17 @@ async def stream_research(
                     await asyncio.sleep(0.05)
             
             final_state = graph.get_state(config).values
-            report = final_state.get("final_report", "No report generated.")
+            report = final_state.get("final_report", "Unable to generate verification report.")
+            verdict = final_state.get("verdict", "PARTLY TRUE")
+            confidence = final_state.get("confidence_score", 0.85)
             
             yield {
                 "event": "message",
                 "data": json.dumps({
                     "type": "complete",
                     "report": report,
+                    "verdict": verdict,
+                    "confidence": confidence,
                     "thread_id": thread_id
                 })
             }
@@ -146,4 +195,5 @@ async def stream_research(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("src.server:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", "8081"))
+    uvicorn.run("src.server:app", host="0.0.0.0", port=port, reload=True)

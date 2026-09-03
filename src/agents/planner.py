@@ -1,37 +1,43 @@
-from typing import List, Dict, Any
+﻿from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from src.state import AgentState
 from src.config import get_agent_llm
+from src.tools.search import clean_query
 
 class PlanOutput(BaseModel):
     queries: List[str] = Field(
-        description="A list of 3 to 5 targeted search queries that cover all key facets of the topic."
+        description="List of 3 to 4 concise keyword queries optimized for search engine fact-checking."
     )
 
 parser = JsonOutputParser(pydantic_object=PlanOutput)
 
-PLANNER_PROMPT = """You are a Lead Research Strategist.
-Your goal is to break down a complex research topic into targeted, high-signal search queries.
+PLANNER_PROMPT = """You are the Lead Claim Analyst & Fact-Checking Strategist.
+Your task is to deconstruct a viral claim or headline into 3 to 4 high-signal keyword search queries to verify facts or debunk hoaxes.
 
-User Topic: {task}
+Target Claim:
+{task}
 {critique_context}
 
-Guidelines:
-1. Create 3 to 5 distinct search queries covering background, latest updates, critical perspectives, and key facts.
-2. Make queries specific and search-engine friendly (in English or Indonesian depending on the topic).
+Query Guidelines (CRITICAL):
+1. DO NOT use conversational phrasing like "is it true that", "why does", "does", "apakah", "kenapa". Formulate tight, substantive keyword phrases.
+2. Produce targeted angles:
+   - Query 1 (Fact-Check Archive): Keyword phrase + "cek fakta" OR "turnbackhoax" OR "fact check".
+   - Query 2 (Official Authority / Institutional Data): Keyword phrase + relevant Indonesian authority (e.g. KLHK, BMKG, Kemenkes, BPOM, Polri, Kominfo).
+   - Query 3 (Credible Media Investigation): Keyword phrase + reputable national media (e.g. "tempo", "kompas", "detik", "antara").
+3. Keep each query between 3 to 6 substantive words.
 
 {format_instructions}
 """
 
 def planner_node(state: AgentState) -> Dict[str, Any]:
-    """Node: Breaks down the task into search queries."""
-    llm = get_agent_llm("planner")
+    """Node: Deconstructs viral claims into targeted search queries."""
+    llm = get_agent_llm("planner", model_override=state.get("planner_model"))
     
     critique_context = ""
     if state.get("critique_feedback"):
-        critique_context = f"\nPrevious reviewer critique to address:\n{state['critique_feedback']}\nEnsure queries address these missing angles."
+        critique_context = f"\nPrevious verification critique notes:\n{state['critique_feedback']}\nFormulate queries to fill in the missing evidentiary gaps."
     
     prompt = ChatPromptTemplate.from_template(
         template=PLANNER_PROMPT,
@@ -39,13 +45,26 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     )
     chain = prompt | llm | parser
     
+    cleaned_task = clean_query(state["task"])
+    
     try:
         response = chain.invoke({
             "task": state["task"],
             "critique_context": critique_context
         })
-        queries = response.get("queries", [state["task"]])
+        raw_queries = response.get("queries", [])
+        queries = [clean_query(q) for q in raw_queries if q.strip()]
+        if not queries:
+            queries = [
+                f"{cleaned_task} cek fakta",
+                f"{cleaned_task} tempo kompas detik",
+                f"{cleaned_task} official report"
+            ]
     except Exception:
-        queries = [state["task"], f"{state['task']} 2026", f"{state['task']} analysis"]
+        queries = [
+            f"{cleaned_task} cek fakta",
+            f"{cleaned_task} tempo kompas detik",
+            f"{cleaned_task} official report"
+        ]
         
     return {"plan": queries}
