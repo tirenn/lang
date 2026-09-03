@@ -1,15 +1,15 @@
-﻿name: Production Deploy (Tags Trigger)
+name: Production Deploy (Tags Trigger)
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Specific Tag to Deploy (leave empty for latest ref)'
-        required: false
-        default: ''
+        description: 'Specific SemVer Tag to Deploy (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
 
 concurrency:
   group: deploy-production
@@ -39,18 +39,23 @@ jobs:
           fi
           echo "All required deployment secrets are present."
 
-      - name: Determine Target Tag / Version
+      - name: Validate and Determine SemVer Tag
         id: get_tag
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then
             TAG="${{ github.event.inputs.release_tag }}"
-          elif [ -n "${{ github.ref_name }}" ]; then
-            TAG="${{ github.ref_name }}"
           else
-            TAG="main"
+            TAG="${{ github.ref_name }}"
           fi
+
+          # Strict validation for format v<major>.<minor>.<patch> (e.g. v1.0.0)
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Deployment rejected! Tag '$TAG' does not match strict SemVer format (vX.Y.Z, e.g. v1.0.0)."
+            exit 1
+          fi
+
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "Target deployment tag: $TAG"
+          echo "Target SemVer deployment tag: $TAG"
 
       - name: Execute Remote Deployment via SSH
         uses: appleboy/ssh-action@v1.2.0
