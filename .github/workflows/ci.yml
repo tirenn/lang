@@ -38,6 +38,7 @@ jobs:
           import src.state
           import src.tools.search
           import src.graph
+          import src.security
           import src.server
           print('? Core modules imported successfully')
           "
