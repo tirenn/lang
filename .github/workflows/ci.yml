@@ -1,4 +1,4 @@
-name: ?? Continuous Integration (CI)
+﻿name: Continuous Integration (CI)
 
 on:
   pull_request:
@@ -11,28 +11,28 @@ concurrency:
 
 jobs:
   python-checks:
-    name: ?? Python Syntax & Import Validation
+    name: Python Syntax & Import Validation
     runs-on: ubuntu-latest
     steps:
-      - name: ?? Checkout Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: ?? Set up Python 3.11
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: ?? Install Dependencies
+      - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: ?? Compile Code Syntax Check
+      - name: Compile Code Syntax Check
         run: |
           python -m compileall src main.py
 
-      - name: ?? Verify Core Module Imports
+      - name: Verify Core Module Imports
         run: |
           python -c "
           import src.state
@@ -40,28 +40,28 @@ jobs:
           import src.graph
           import src.security
           import src.server
-          print('? Core modules imported successfully')
+          print('Core modules imported successfully')
           "
 
   docker-check:
-    name: ?? Docker Build & Compose Validation
+    name: Docker Build & Compose Validation
     runs-on: ubuntu-latest
     steps:
-      - name: ?? Checkout Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: ?? Prepare Environment File
+      - name: Prepare Environment File
         run: |
           cp .env.example .env
 
-      - name: ?? Ensure Network Exists for Compose Config
+      - name: Ensure Network Exists for Compose Config
         run: |
           docker network create tirenn-net || true
 
-      - name: ?? Validate Docker Compose Config
+      - name: Validate Docker Compose Config
         run: |
           docker compose config --quiet
 
-      - name: ??? Build Docker Container
+      - name: Build Docker Container
         run: |
           docker build -t multi-agent-researcher:ci-test .

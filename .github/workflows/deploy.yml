@@ -1,4 +1,4 @@
-name: ?? Production Deploy (Tags Trigger)
+﻿name: Production Deploy (Tags Trigger)
 
 on:
   push:
@@ -17,13 +17,13 @@ concurrency:
 
 jobs:
   deploy:
-    name: ?? Deploy Autonomous Research Agent to VPS
+    name: Deploy Autonomous Research Agent to VPS
     runs-on: ubuntu-latest
     steps:
-      - name: ?? Checkout Code
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: ?? Verify Required Secrets
+      - name: Verify Required Secrets
         id: check_secrets
         run: |
           MISSING=""
@@ -33,13 +33,13 @@ jobs:
           if [ -z "${{ secrets.DOPPLER_TOKEN }}" ]; then MISSING="$MISSING DOPPLER_TOKEN"; fi
 
           if [ -n "$MISSING" ]; then
-            echo "? Missing required GitHub Secrets: $MISSING"
+            echo "Missing required GitHub Secrets: $MISSING"
             echo "Please configure them in Repository Settings -> Secrets and variables -> Actions."
             exit 1
           fi
-          echo "? All required deployment secrets are present."
+          echo "All required deployment secrets are present."
 
-      - name: ??? Determine Target Tag / Version
+      - name: Determine Target Tag / Version
         id: get_tag
         run: |
           if [ -n "${{ github.event.inputs.release_tag }}" ]; then
@@ -50,9 +50,9 @@ jobs:
             TAG="main"
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "?? Target deployment tag: $TAG"
+          echo "Target deployment tag: $TAG"
 
-      - name: ?? Execute Remote Deployment via SSH
+      - name: Execute Remote Deployment via SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
           TARGET_TAG: ${{ steps.get_tag.outputs.tag }}
@@ -67,7 +67,7 @@ jobs:
           script: |
             set -e
             echo "========================================================"
-            echo "?? Deploying Autonomous Research Agent [$TARGET_TAG]"
+            echo "Deploying Autonomous Research Agent [$TARGET_TAG]"
             echo "========================================================"
 
             # 1. Pastikan direktori target ada
@@ -76,23 +76,23 @@ jobs:
 
             # 2. Pastikan Doppler CLI terpasang di VPS
             if ! command -v doppler &> /dev/null; then
-              echo "?? Installing Doppler CLI on VPS..."
+              echo "Installing Doppler CLI on VPS..."
               curl -Ls https://cli.doppler.com/install.sh | sh
             fi
 
             # 3. Sinkronisasi repository ke git tag target
             if [ -d ".git" ]; then
-              echo "?? Fetching latest tags from remote..."
+              echo "Fetching latest tags from remote..."
               git fetch --all --tags --prune
               git checkout "$TARGET_TAG"
             else
-              echo "?? Git directory not initialized in $TARGET_DIR. Cloning repository..."
+              echo "Git directory not initialized in $TARGET_DIR. Cloning repository..."
               git clone https://github.com/${{ github.repository }}.git .
               git checkout "$TARGET_TAG"
             fi
 
             # 4. Unduh secrets produksi dari Doppler ke .env
-            echo "?? Fetching production secrets from Doppler..."
+            echo "Fetching production secrets from Doppler..."
             doppler secrets download --token="$DOPPLER_TOKEN" --no-file --format env > .env
             chmod 600 .env
 
@@ -100,11 +100,11 @@ jobs:
             docker network create tirenn-net 2>/dev/null || true
 
             # 6. Build dan jalankan container
-            echo "?? Building and starting containers..."
+            echo "Building and starting containers..."
             docker compose up -d --build --remove-orphans
 
             # 7. Tunggu healthcheck
-            echo "? Verifying service health..."
+            echo "Verifying service health..."
             timeout 45s bash -c '
               until docker compose ps | grep -q "(healthy)"; do
                 sleep 2
@@ -113,6 +113,6 @@ jobs:
 
             # 8. Verifikasi container
             echo "========================================================"
-            echo "? Deployment Successful! Running Containers:"
+            echo "Deployment Successful! Running Containers:"
             echo "========================================================"
             docker compose ps
