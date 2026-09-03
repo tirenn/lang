@@ -104,9 +104,9 @@ jobs:
             # 5. Pastikan shared network tirenn-net ada
             docker network create tirenn-net 2>/dev/null || true
 
-            # 6. Build dan jalankan container
+            # 6. Build dan jalankan container bersih
             echo "Building and starting containers..."
-            docker compose up -d --build --remove-orphans
+            docker compose up -d --build --force-recreate --remove-orphans
 
             # 7. Tunggu healthcheck
             echo "Verifying service health..."
@@ -116,7 +116,12 @@ jobs:
               done
             ' || true
 
-            # 8. Verifikasi container
+            # 8. Bersihkan image dan BuildKit cache lama (> 24 jam)
+            echo "Pruning unused images and builder cache (> 24h)..."
+            docker image prune -a -f --filter "until=24h" 2>/dev/null || docker image prune -f
+            docker builder prune -f --filter "until=24h" 2>/dev/null || true
+
+            # 9. Verifikasi container
             echo "========================================================"
             echo "Deployment Successful! Running Containers:"
             echo "========================================================"

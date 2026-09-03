@@ -48,10 +48,14 @@ docker-build:
 	docker build -t multi-agent-researcher:latest .
 
 docker-up:
-	docker compose up -d --build
+	docker compose up -d --build --force-recreate --remove-orphans
 
 docker-down:
 	docker compose down
+
+docker-prune:
+	-docker image prune -a -f --filter "until=24h"
+	-docker builder prune -f --filter "until=24h"
 
 docker-logs:
 	docker compose logs -f
