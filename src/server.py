@@ -4,21 +4,34 @@ import uuid
 import asyncio
 from typing import Optional, AsyncGenerator
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
 
 from src.graph import build_research_graph
 from src.config import is_langsmith_configured
+from src.security import (
+    SecurityHeadersMiddleware,
+    rate_limiter,
+    concurrency_guard,
+    validate_claim_input,
+    shield_error,
+    MAX_INPUT_LENGTH,
+    RATE_LIMIT_MAX_REQUESTS
+)
 
-app = FastAPI(title="Autonomous Multi-Agent Research Engine", version="1.0.0")
+app = FastAPI(title="FactCheck AI - Autonomous Misinformation Intelligence Engine", version="1.0.0")
 
+# Security Defense Middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -35,7 +48,7 @@ async def get_index():
     return "<h1>Index page not found. Check src/static/index.html</h1>"
 
 @app.get("/api/config")
-async def get_system_config():
+async def get_system_config(request: Request):
     provider = "OpenRouter" if os.getenv("OPENROUTER_API_KEY") else ("OpenAI" if os.getenv("OPENAI_API_KEY") else "Custom")
     raw_models = os.getenv("AVAILABLE_MODELS", "")
     if raw_models:
@@ -49,6 +62,10 @@ async def get_system_config():
             "meta-llama/llama-3.3-70b-instruct:free"
         ]
 
+    forwarded = request.headers.get("X-Forwarded-For")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+    quota_status = rate_limiter.get_status(client_ip)
+
     default_model = available_models[0]
     return {
         "langsmith_active": is_langsmith_configured(),
@@ -58,11 +75,21 @@ async def get_system_config():
         "fact_checker_model": available_models[1] if len(available_models) > 1 else default_model,
         "writer_model": default_model,
         "available_models": available_models,
+        "max_input_length": MAX_INPUT_LENGTH,
+        "rate_limit_max": RATE_LIMIT_MAX_REQUESTS,
+        "quota": quota_status,
         "provider": provider
     }
 
+@app.get("/api/quota")
+async def get_current_quota(request: Request):
+    forwarded = request.headers.get("X-Forwarded-For")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+    return rate_limiter.get_status(client_ip)
+
 @app.get("/api/stream")
 async def stream_research(
+    request: Request,
     task: str = Query(..., description="Research topic or question"),
     planner_model: Optional[str] = Query(None, description="Model override for Planner"),
     researcher_model: Optional[str] = Query(None, description="Model override for Researcher"),
@@ -71,55 +98,101 @@ async def stream_research(
 ):
     """
     Streams LangGraph step-by-step execution events using Server-Sent Events (SSE).
+    Protected by Rate Limiting, Concurrency Guard, and Input Sanitization.
     """
+    # 1. Client IP Extraction
+    forwarded = request.headers.get("X-Forwarded-For")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+
+    # 2. Rate Limiting Check
+    is_allowed, retry_after = rate_limiter.check(client_ip)
+    if not is_allowed:
+        retry_msg = f"Rate limit reached (max {RATE_LIMIT_MAX_REQUESTS} verifications per hour). Please retry in {retry_after} seconds."
+        async def rate_limit_event(msg=retry_msg):
+            yield {
+                "event": "message",
+                "data": json.dumps({
+                    "type": "error",
+                    "message": msg
+                })
+            }
+        return EventSourceResponse(rate_limit_event())
+
+    # 3. Input Validation & Prompt Injection Defense
+    try:
+        sanitized_task = validate_claim_input(task)
+    except ValueError as ve:
+        err_msg = str(ve)
+        async def validation_error_event(msg=err_msg):
+            yield {
+                "event": "message",
+                "data": json.dumps({
+                    "type": "error",
+                    "message": msg
+                })
+            }
+        return EventSourceResponse(validation_error_event())
+
+    # 4. Resource Concurrency Guard
+    slot_acquired = await concurrency_guard.acquire()
+    if not slot_acquired:
+        async def busy_event():
+            yield {
+                "event": "message",
+                "data": json.dumps({
+                    "type": "error",
+                    "message": "Verification engine is currently busy with concurrent analyses. Please wait a few moments and retry."
+                })
+            }
+        return EventSourceResponse(busy_event())
+
     async def event_generator() -> AsyncGenerator[dict, None]:
-        thread_id = str(uuid.uuid4())
-        config = {"configurable": {"thread_id": thread_id}}
-        
-        raw_models = os.getenv("AVAILABLE_MODELS", "")
-        fallback_models = [m.strip() for m in raw_models.split(",") if m.strip()] if raw_models else ["minimax/minimax-m2.7:free"]
-        def_m = fallback_models[0]
-        
-        act_planner = planner_model or def_m
-        act_researcher = researcher_model or def_m
-        act_checker = fact_checker_model or (fallback_models[1] if len(fallback_models) > 1 else def_m)
-        act_writer = writer_model or def_m
-        
-        # Initial event
-        yield {
-            "event": "message",
-            "data": json.dumps({
-                "type": "init",
-                "thread_id": thread_id,
-                "task": task,
-                "models": {
-                    "planner": act_planner,
-                    "researcher": act_researcher,
-                    "fact_checker": act_checker,
-                    "writer": act_writer
-                },
-                "langsmith_active": is_langsmith_configured()
-            })
-        }
-        
-        # Build research graph
-        graph = build_research_graph(checkpointer=True, human_in_the_loop=False)
-        initial_state = {
-            "task": task,
-            "plan": [],
-            "research_data": [],
-            "critique_feedback": None,
-            "critique_passed": False,
-            "revision_count": 0,
-            "max_revisions": 2,
-            "planner_model": act_planner,
-            "researcher_model": act_researcher,
-            "fact_checker_model": act_checker,
-            "writer_model": act_writer,
-            "final_report": None
-        }
-        
         try:
+            thread_id = str(uuid.uuid4())
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            raw_models = os.getenv("AVAILABLE_MODELS", "")
+            fallback_models = [m.strip() for m in raw_models.split(",") if m.strip()] if raw_models else ["minimax/minimax-m2.7:free"]
+            def_m = fallback_models[0]
+            
+            act_planner = planner_model or def_m
+            act_researcher = researcher_model or def_m
+            act_checker = fact_checker_model or (fallback_models[1] if len(fallback_models) > 1 else def_m)
+            act_writer = writer_model or def_m
+            
+            # Initial event
+            yield {
+                "event": "message",
+                "data": json.dumps({
+                    "type": "init",
+                    "thread_id": thread_id,
+                    "task": sanitized_task,
+                    "models": {
+                        "planner": act_planner,
+                        "researcher": act_researcher,
+                        "fact_checker": act_checker,
+                        "writer": act_writer
+                    },
+                    "langsmith_active": is_langsmith_configured()
+                })
+            }
+            
+            # Build research graph
+            graph = build_research_graph(checkpointer=True, human_in_the_loop=False)
+            initial_state = {
+                "task": sanitized_task,
+                "plan": [],
+                "research_data": [],
+                "critique_feedback": None,
+                "critique_passed": False,
+                "revision_count": 0,
+                "max_revisions": 2,
+                "planner_model": act_planner,
+                "researcher_model": act_researcher,
+                "fact_checker_model": act_checker,
+                "writer_model": act_writer,
+                "final_report": None
+            }
             for output in graph.stream(initial_state, config=config, stream_mode="updates"):
                 for node_name, node_output in output.items():
                     log_data = {"node": node_name}
@@ -183,13 +256,16 @@ async def stream_research(
             }
             
         except Exception as e:
+            shielded_message = shield_error(e)
             yield {
                 "event": "message",
                 "data": json.dumps({
                     "type": "error",
-                    "message": str(e)
+                    "message": shielded_message
                 })
             }
+        finally:
+            concurrency_guard.release()
 
     return EventSourceResponse(event_generator())
 

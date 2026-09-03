@@ -68,7 +68,11 @@
                 <span class="text-[11px] text-zinc-400 hidden sm:inline">Automated Hoax & Fact Verification</span>
             </div>
             
-            <div class="flex items-center space-x-3 text-xs">
+            <div class="flex items-center space-x-2.5 text-xs">
+                <div id="quotaBadge" class="font-mono text-[11px] text-zinc-400 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded flex items-center gap-1.5">
+                    <span class="text-zinc-500">quota:</span>
+                    <span id="quotaText" class="text-zinc-300">--/--</span>
+                </div>
                 <div id="langsmithTag" class="hidden font-mono text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-800/50 px-2 py-0.5 rounded">
                     audit: langsmith active
                 </div>
@@ -83,9 +87,9 @@
         <div class="bg-zinc-900 border border-zinc-800 rounded-lg p-3.5 space-y-3">
             <div class="flex flex-col gap-2">
                 <div class="relative flex items-center">
-                    <input type="text" id="taskInput" 
+                    <input type="text" id="taskInput" maxlength="500"
                         class="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-zinc-600 transition font-sans"
-                        placeholder="Enter a claim, rumor, or headline to verify (e.g. are Kalimantan forest fires solely caused by palm oil?)..."
+                        placeholder="Enter a claim, rumor, or headline to verify (max 500 characters)..."
                         onkeydown="if(event.key === 'Enter') startResearch();">
                     <button id="runBtn" onclick="startResearch()" 
                         class="absolute right-1.5 px-3 py-1.5 bg-zinc-100 hover:bg-white text-zinc-950 font-medium text-xs rounded transition flex items-center gap-1.5 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
@@ -222,12 +226,37 @@
             }
         }
 
+        function updateQuotaDisplay(quota) {
+            if (!quota) return;
+            var el = document.getElementById("quotaText");
+            if (!el) return;
+            el.textContent = quota.remaining + "/" + quota.limit + " left (" + quota.window_hours + "h window)";
+            if (quota.remaining <= 1) {
+                el.className = "text-rose-400 font-semibold";
+            } else if (quota.remaining <= 3) {
+                el.className = "text-amber-400 font-medium";
+            } else {
+                el.className = "text-emerald-400";
+            }
+        }
+
+        function fetchQuota() {
+            fetch("/api/quota")
+                .then(function(res) { return res.json(); })
+                .then(function(quota) { updateQuotaDisplay(quota); })
+                .catch(function(err) { console.error("Quota fetch error:", err); });
+        }
+
         function initConfig() {
             fetch("/api/config")
                 .then(function(res) { return res.json(); })
                 .then(function(data) {
                     if (data.langsmith_active) {
                         document.getElementById("langsmithTag").classList.remove("hidden");
+                    }
+
+                    if (data.quota) {
+                        updateQuotaDisplay(data.quota);
                     }
 
                     var models = data.available_models || [];
@@ -335,6 +364,7 @@
                 appendLog("done", "Verification report synthesized with verified citations.");
                 resetButton();
                 eventSource.close();
+                fetchQuota();
             } else if (data.type === "error") {
                 appendLog("err", data.message);
                 var status = document.getElementById("statusIndicator");
@@ -342,6 +372,7 @@
                 status.className = "text-[11px] font-mono text-rose-400";
                 resetButton();
                 eventSource.close();
+                fetchQuota();
             }
         }
 
