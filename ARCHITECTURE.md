@@ -47,14 +47,14 @@ As visualized in the architecture blueprint above, **FactCheck AI** is organized
 ```mermaid
 flowchart TD
     %% Client & Ingress Tier
-    subgraph Tier1 [1. Client & Ingress Tier]
+    subgraph Tier1 ["1. Client & Ingress Tier"]
         Client["Browser Client (Geist Mono / Inter UI)"]
         CF["Cloudflare Zero Trust Tunnel (cloudflared)"]
         Client -->|HTTPS / WSS| CF
     end
 
     %% Security & Gateway Middleware Tier
-    subgraph Tier2 [2. Security & Gateway Middleware Tier (FastAPI :8081)]
+    subgraph Tier2 ["2. Security & Gateway Middleware Tier (FastAPI :8081)"]
         SecHeaders["Security Headers Middleware\n(CSP, X-Frame-Options, X-Content-Type)"]
         RateLimit{"Sliding Window Rate Limiter\n(10 req/hr per IP)"}
         InputVal{"Input Validator & Anti-Injection\n(Len 3-500 chars, Prompt Injection Heuristics)"}
@@ -69,7 +69,7 @@ flowchart TD
     end
 
     %% Multi-Agent LangGraph Tier
-    subgraph Tier3 [3. LangGraph Multi-Agent Orchestration Tier (src/graph.py)]
+    subgraph Tier3 ["3. LangGraph Multi-Agent Orchestration Tier (src/graph.py)"]
         START([User Claim]) --> Planner["Planner Agent\n(src/agents/planner.py)"]
         Planner --> Researcher["Researcher Agent\n(src/agents/researcher.py)"]
         Researcher --> FactChecker["Fact-Checker Agent\n(src/agents/fact_checker.py)"]
@@ -80,14 +80,14 @@ flowchart TD
     end
 
     %% SOLID Abstractions & Tools
-    subgraph Tier4 [4. SOLID Tool & Abstraction Tier]
+    subgraph Tier4 ["4. SOLID Tool & Abstraction Tier"]
         SearchService["SearchService (src/tools/search.py)\n- Region: id-id\n- Domain Blacklist Filter\n- Substantive Keyword Matcher"]
         DDG["DuckDuckGo Search Engine"]
         SearchService --> DDG
     end
 
     %% External Infrastructure Tier
-    subgraph Tier5 [5. Infrastructure & Shared Services Tier (tirenn-net)]
+    subgraph Tier5 ["5. Infrastructure & Shared Services Tier (tirenn-net)"]
         Redis[("Redis Cache (:6379)\nSliding Window ZSET")]
         OpenRouter["OpenRouter LLM API\n(3-Model Automatic Fallback Cascade)"]
         Promtail["Promtail Log Collector\n(/tirenn-.* regex)"]
@@ -100,13 +100,13 @@ flowchart TD
     SSE <--> Tier3
     RateLimit <--> Redis
     Researcher <--> SearchService
-    Planner & FactChecker & Writer <--> OpenRouter
+    Planner --> OpenRouter
+    FactChecker --> OpenRouter
+    Writer --> OpenRouter
     Tier2 -.-> Promtail --> Loki
     Tier3 -.-> LangSmith
     Doppler -.->|Secrets at Deploy| Tier2
 ```
-
----
 
 ---
 
@@ -205,7 +205,7 @@ sequenceDiagram
     Gateway->>Sec: Check Rate Limit (IP) & Concurrency
     Sec-->>Gateway: Quota OK, Slot Acquired
     Gateway->>Sec: Validate Input & Prompt Injection Scan
-    Sec-->>Gateway: Input Sanitized (<user_claim>)
+    Sec-->>Gateway: Input Sanitized (user_claim XML boundary)
     Gateway-->>User: SSE Event: type="init" (Session ID, Models)
 
     rect rgb(20, 24, 33)
