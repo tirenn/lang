@@ -1,4 +1,4 @@
-﻿# System Architecture Specification: FactCheck AI
+# System Architecture Specification: FactCheck AI
 
 ## Autonomous Multi-Agent Hoax & Misinformation Verification Engine
 
@@ -8,7 +8,41 @@ The system is built upon **LangGraph**, **FastAPI**, **LangChain**, **LangSmith*
 
 ---
 
-## 1. High-Level Design (HLD) Diagram
+## 1. High-Level Design (HLD) Architecture
+
+![FactCheck AI - High-Level System Architecture and Data Flow](docs/architecture_diagram.png)
+
+### 1.1 Architectural Overview & Tier Structure
+
+As visualized in the architecture blueprint above, **FactCheck AI** is organized into four distinct horizontal tiers designed to deliver strict separation of concerns, enterprise-grade defense, and cyclical agent self-correction:
+
+1. **Tier 1: Client & Ingress Tier**
+   - **Web UI**: Modern dark-mode interface (Geist Mono, Inter, `#09090b` zinc) featuring live SSE audit trails, IFCN verdict badges, and dynamic rate-limit counters.
+   - **Cloudflare Zero Trust Tunnel (`cloudflared`)**: Direct encrypted outbound tunnel connecting Cloudflare's edge to the internal container network (`tirenn-net`), eliminating the need for open public ports.
+
+2. **Tier 2: API Gateway & Security Defense (FastAPI :8081)**
+   - **FastAPI Core**: High-performance asynchronous ASGI web framework handling requests and Server-Sent Events (SSE).
+   - **Redis Sliding Window Rate Limiting**: Enforces a rolling 10 requests/hour limit per client IP using Redis Sorted Sets (`ZSET`).
+   - **Input Sanitizer & Anti-Injection**: Validates character boundaries (3–500 chars) and scans for adversarial jailbreak attacks (*"ignore instructions"*, *"DAN mode"*), isolating inputs into `<user_claim>` XML tags.
+   - **Concurrency Guard**: `asyncio.Semaphore(2)` capping simultaneous intensive research cycles to protect VPS compute resources.
+
+3. **Tier 3: LangGraph Multi-Agent Engine**
+   - **Stateful Graph Orchestration**: Cyclic state machine managing inter-agent communication and state accumulation.
+   - **Planner Agent**: Deconstructs rumors into 3–4 targeted keyword queries for fact archives, authorities, and credible media.
+   - **Researcher Agent**: Coordinates web retrieval, enforces domain blacklists, and deduplicates source URLs.
+   - **Fact-Checker Board**: Cross-examines gathered sources against the claim under IFCN/MAFINDO standards. If evidence is inadequate, it triggers a **conditional feedback loop** back to the Planner; otherwise, it passes to the Writer.
+   - **Writer Agent**: Synthesizes verified evidence into an objective, publication-ready Markdown fact-check report.
+
+4. **Tier 4: External Services & Infrastructure**
+   - **DuckDuckGo Search Engine**: Region-targeted (`id-id`) search execution with blacklist and keyword relevance heuristics.
+   - **OpenRouter LLM Cascade**: Resilient 3-model automatic fallback cascade mitigating upstream 429 rate limits.
+   - **Redis Cache (:6379)**: Distributed store for sliding window rate limiter timestamps.
+   - **Grafana Loki & Promtail**: Distributed structured logging capturing container stdout via `/tirenn-(.*)` regex.
+   - **LangSmith**: Node-by-node tracing, token consumption tracking, and latency observability.
+
+---
+
+### 1.2 Interactive Flowchart Diagram
 
 ```mermaid
 flowchart TD
@@ -74,37 +108,84 @@ flowchart TD
 
 ---
 
-## 2. High-Level Architecture Explanation
+---
 
-The architecture is divided into five decoupled, highly cohesive tiers:
+## 2. Low-Level Design (LLD) Execution & State Machine Flow
 
-### Tier 1: Client & Ingress Tier
-* **Browser Interface**: Built with zero "AI-slop", featuring an investigative journalism aesthetic (Geist Mono, Inter, neutral zinc `#09090b` palette), live audit trail logging, dynamic verdict badges, and real-time quota counters.
-* **Cloudflare Tunnel (`cloudflared`)**: Routes inbound HTTPS traffic directly from Cloudflare's edge to the internal Docker container (`tirenn-lang-agent:8081`) via `tirenn-net`. No ports are directly exposed to the public internet.
+![FactCheck AI - Low-Level Design Execution and State Machine Flow](docs/low_level_flow_diagram.png)
 
-### Tier 2: Security & Gateway Middleware Tier
-Every request undergoes four strict sequential security barriers before hitting any LLM logic:
-1. **Security Headers Middleware**: Injects `Content-Security-Policy`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, and `Referrer-Policy` on every response to eliminate clickjacking and MIME attacks.
-2. **Sliding Window Rate Limiter**: Implemented via Redis Sorted Sets (`ZSET`). Prunes timestamps older than 60 minutes and caps each client IP at 10 verifications/hour. Seamlessly falls back to an in-memory `deque` if Redis is unreachable.
-3. **Input Sanitizer & Prompt Injection Shield**: Restricts input length to 3–500 characters and scans for adversarial injection patterns (*"ignore previous instructions"*, *"system prompt"*, *"jailbreak"*, *"DAN mode"*). Neutralizes dangerous tags into `&lt;` and `&gt;`.
-4. **Concurrency Guard**: An `asyncio.Semaphore` restricting concurrent heavy graph executions to 2 simultaneous runs to prevent VPS CPU and memory exhaustion.
+### 2.1 Step-by-Step Internal Execution Pipeline
 
-### Tier 3: LangGraph Multi-Agent Orchestration Tier
-Coordinates specialized autonomous agent personas in a stateful, cyclical graph with automatic self-correction:
-* **Planner**: Deconstructs viral rumors into 3–4 high-signal keyword queries targeting official registries (e.g. KLHK, BMKG, BPOM, Kemenkes, Kominfo), fact-check archives, and reputable national media.
-* **Researcher**: Executes targeted searches, enforces domain blacklists, and deduplicates URLs across multiple search cycles.
-* **Fact-Checker (Verification Board)**: Cross-examines collected evidence against the claim under IFCN standards, assigns an official verdict (`TRUE`, `FALSE / HOAX`, `PARTLY TRUE`, `DISINFORMATION`, `MISINFORMATION`, `UNPROVEN`) and a quantitative confidence score.
-* **Writer**: Synthesizes findings into an objective, publication-ready journalistic report in Markdown with verified source hyperlinks.
-* **Cyclic Feedback Loop**: If evidence is insufficient and iterations remain, the Fact-Checker rejects the findings and loops back to the Planner with constructive critique notes.
+The Low-Level Design (LLD) diagram above details the exact function-level execution, data transformations, security barriers, and state transitions that occur during each verification request:
 
-### Tier 4: SOLID Tool & Abstraction Tier
-* Tools implement abstract protocols (e.g. `SearchToolInterface`).
-* `SearchService` isolates domain blacklists (filtering e-commerce sites like Samsung, Shopee, Amazon, and quiz spam like 16Personalities), enforces regional Indonesian search (`id-id`), and guarantees that returned snippets share substantive keywords with the query.
+#### Phase 1: Ingress & Defensive Security Gateways
+1. **Client Request Ingestion (`src/server.py`)**:
+   - Inbound HTTP GET request to `/api/stream?task=<claim>` via Cloudflare Tunnel.
+   - `extract_client_ip(request)` reads `X-Forwarded-For` header to resolve the real client IP behind proxy hops.
+2. **Sliding Window Rate Limiter (`src/security.py`)**:
+   - Executes atomic Redis commands: `ZREMRANGEBYSCORE ratelimit:ip:<client_ip> 0 (now - 3600)` followed by `ZCARD`.
+   - If count $\ge 10$, rejects request with SSE error event and `retry_after` countdown.
+   - If count $< 10$, logs timestamp via `ZADD` and sets 1-hour key expiry. Seamlessly defaults to thread-safe `collections.deque` if Redis is offline.
+3. **Input Sanitizer & Prompt Injection Defense (`src/security.py`)**:
+   - Validates claim string length: $3 \le \text{length} \le 500$ characters.
+   - Evaluates regex patterns for jailbreak strings (*"ignore previous instructions"*, *"DAN mode"*, *"system prompt"*).
+   - Encapsulates payload in `<user_claim>` XML isolation boundaries to prevent LLM instruction hijacking.
+4. **Concurrency Guard (`src/security.py`)**:
+   - Calls `await concurrency_guard.acquire()` using an `asyncio.Semaphore(2)`.
+   - If 2 analyses are already running, immediately emits an engine busy notice to protect VPS memory and CPU.
 
-### Tier 5: Infrastructure & Shared Services Tier
-* **Network Mesh**: All services communicate across the external Docker bridge network `tirenn-net`.
-* **Logging & Observability**: Promtail captures container logs via the `/tirenn-(.*)` regex rule, tagging them with `service="lang-agent"` for Grafana Loki indexing.
-* **Secret Management**: Production secrets are injected into `.env` at build/deploy time via Doppler CLI (`project: lang`, `config: prd`).
+#### Phase 2: LangGraph State Machine & Agent Execution
+5. **State Initialization (`src/server.py` & `src/state.py`)**:
+   - Assigns a unique `thread_id = str(uuid.uuid4())` configured into `MemorySaver` checkpointer.
+   - Emits SSE event `type: "init"` containing session parameters and active model assignments.
+   - Seeds initial immutable `AgentState`:
+     ```python
+     state = {
+         "task": sanitized_task,
+         "plan": [],
+         "research_data": [],
+         "critique_feedback": None,
+         "critique_passed": False,
+         "revision_count": 0,
+         "max_revisions": 2
+     }
+     ```
+6. **Planner Node Execution (`PlannerAgent.execute()`)**:
+   - Binds `PLANNER_PROMPT` with task and optional previous `critique_feedback`.
+   - Invokes chain: `ChatPromptTemplate | llm | JsonOutputParser(PlanOutput)`.
+   - Cleans output queries via `clean_query()` (stripping conversational stop words).
+   - Emits SSE event `type: "step"`, `node: "planner"`.
+7. **Researcher Node Execution (`ResearcherAgent.execute()`)**:
+   - Injected with `SearchToolInterface` (`SearchService`).
+   - Executes DuckDuckGo queries targeted at `id-id` with 0.35s rate pacing.
+   - Filters out domain blacklist (e-commerce, gadget specs, quiz spam) and verifies keyword relevance.
+   - Deduplicates findings against prior URLs.
+   - Emits state delta via reducer: `add_research_items(existing, new)`.
+   - Emits SSE event `type: "step"`, `node: "researcher"`.
+8. **Fact-Checker Node Execution (`FactCheckerAgent.execute()`)**:
+   - Formats evidence list and evaluates claim against IFCN/MAFINDO classification taxonomy.
+   - Assigns official verdict, confidence score ($0.0 \dots 1.0$), and critique notes.
+   - Increments `revision_count += 1`.
+   - Emits SSE event `type: "step"`, `node: "fact_checker"`.
+9. **Conditional Routing Decision (`route_after_fact_check()`)**:
+   - Evaluates:
+     ```python
+     if state["critique_passed"] or state["revision_count"] >= state["max_revisions"]:
+         return "writer"
+     return "planner"  # Loop back with critique feedback
+     ```
+   - If rejected and under iteration limit: routes back to **Planner** with critique notes to fill evidentiary gaps.
+   - If verified or threshold reached: routes forward to **Writer**.
+10. **Writer Node Execution (`WriterAgent.execute()`)**:
+    - Synthesizes findings into an objective, publication-ready investigative report in Markdown.
+    - Structures article: `# [FACT CHECK] Headline`, `## Verification Verdict Badge`, `## Circulating Claim`, `## Fact Investigation`, `## Executive Conclusion`, and `## Verified Sources`.
+    - Emits SSE event `type: "step"`, `node: "writer"`.
+
+#### Phase 3: Egress Streaming & Teardown
+11. **Final Delivery & Resource Cleanup (`src/server.py`)**:
+    - Emits final SSE event `type: "complete"` with full report, verdict banner, and confidence score.
+    - Inside ASGI `finally:` block, calls `concurrency_guard.release()`, freeing the semaphore slot for queued requests.
+    - If exceptions occur, `shield_error()` sanitizes tracebacks, masking internal IPs, container names, and API keys.
 
 ---
 
@@ -242,6 +323,9 @@ class AgentState(TypedDict):
 │   └── workflows/
 │       ├── ci.yml              # PR validation (compilation, module imports, compose config)
 │       └── deploy.yml          # Tag deployment via SSH & Doppler (v1.0.0-core)
+├── docs/
+│   ├── architecture_diagram.png    # High-Level Design (HLD) architecture blueprint
+│   └── low_level_flow_diagram.png  # Low-Level Design (LLD) state machine execution flow
 ├── doppler.yaml                # Doppler configuration (project: lang, config: prd)
 ├── Dockerfile                  # Production Python 3.11-slim container
 ├── docker-compose.yml          # Container orchestration (:8081, tirenn-net external network)
